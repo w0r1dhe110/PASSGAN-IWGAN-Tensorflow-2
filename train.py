@@ -22,6 +22,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import os
+import pickle
 import tempfile
 from datetime import datetime
 from functools import partial
@@ -66,7 +67,7 @@ d_opt: Discriminator Adam Optimiser
 
 class WGANGP:
     def __init__(self, dataset_info):
-        self.dataset_name = FLAGS.dataset
+        self.dataset_name = 'test'
         self.iterations = FLAGS.iterations
         self.checkpoints = FLAGS.checkpoints
         self.z_dim = FLAGS.z_size
@@ -77,8 +78,7 @@ class WGANGP:
         self.n_critic = FLAGS.n_critic
         self.vocab_size = FLAGS.vocab_size
         self.grad_penalty_weight = FLAGS.g_penalty
-        self.total_passwords = dataset_info.splits.total_num_examples
-        self.encoder = dataset_info.features['password'].encoder
+        self.total_passwords = dataset_info['total_num_examples']
         self.G = BuildGenerator(layer_dim=self.layer_dim, seq_len=self.seq_len)
         self.D = BuildDiscriminator(layer_dim=self.layer_dim, seq_len=self.seq_len)
         self.g_opt = tf.keras.optimizers.Adam(learning_rate=FLAGS.g_lr, beta_1=0.5, beta_2=0.9)
@@ -105,7 +105,7 @@ class WGANGP:
             for iteration, batch in zip(range(self.iterations), dataset):
                 for _ in tf.range(
                         self.n_critic):
-                    self.text = batch['password']
+                    self.text = batch
                     real = tf.reshape(tf.dtypes.cast(self.text, tf.float32), [2, 1, 32])
                     self.train_d(real)
                     d_loss = self.train_d(real)
@@ -229,12 +229,12 @@ dataset_info: Information contained within selected dataset.
 
 class DatasetPipeline:
     def __init__(self):
-        self.dataset_name = FLAGS.dataset
+        self.dataset_path = FLAGS.input
         self.epochs = FLAGS.epochs
         self.batch_size = FLAGS.batch_size
         self.layer_dim = FLAGS.layer_dim
         self.preprocess = FLAGS.preprocess
-        self.dataset_info = []
+        self.dataset_info = {'total_num_examples': 0}
 
     def preprocess_label(self, passwords):
         return tf.cast(passwords, tf.int64)
@@ -247,12 +247,16 @@ class DatasetPipeline:
             p.unlink()
         return dataset.cache(str(cache_dir / self.dataset_name))
 
-    def load_dataset(self):
-        ds, self.dataset_info = tfds.load(name=self.dataset_name,
-                                          split='train[:80%]',
-                                          with_info=True)
 
-        ds = self.dataset_cache(ds)
+    def load_local_dataset(self):
+
+        # LOAD DATASET
+        with open(self.dataset_path, 'rb') as f:
+            char_map, (X_train, X_test, X_test_clean) = pickle.load(f)
+        
+        self.dataset_info['total_num_examples'] = len(X_train)
+        ds = tf.data.Dataset.from_tensor_slices(X_train)
+  
         ds = ds.shuffle(50000, reshuffle_each_iteration=True)
         ds = ds.apply(tf.data.experimental.unbatch())
         ds = ds.batch(self.batch_size, drop_remainder=False)
